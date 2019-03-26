@@ -1,3 +1,4 @@
+#define DEBUG 0
 //Назначение пинов контроллера
 //LCD
 const byte RS=6, E=7, DB4=5, DB5=4, DB6=3, DB7=2;
@@ -16,6 +17,10 @@ const byte colPins[COLS] = {18, 19, 8};
 const byte sdChipSelect = 9;
 //SPI AD9833
 const byte genChipSelect = SS;
+//Выход "Включено"
+const byte pinProgStarted = 1;
+//Выход "Сигнал"
+const byte pinBuzz = 0;
 
 //https://tsibrov.blogspot.com/2018/06/ad9833.html
 #include <SPI.h>
@@ -26,7 +31,7 @@ const byte genChipSelect = SS;
 // библиотека поддержки SD карты
 #include <SD.h>
 
-#if 0
+#if DEBUG
   #define SERIAL_BEGIN(a) Serial.begin(a);  while (!Serial);
   #define WRITE(a) Serial.write(a)
   #define PRINTLN() Serial.println()
@@ -60,59 +65,177 @@ LiquidCrystal lcd(RS, E, DB4, DB5, DB6, DB7);
 //Инициализация объекта-клавиатуры
 Keypad keypad = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS );
 
-float programFrequency[50];
-const float* pProgramFrequency;
-byte programDelay[50];
-const byte* pProgramDelay;
+float programFrequency;
+float programDelay;
 uint16_t programStage;
 uint16_t programStagesNumber;
 bool started;
 
 unsigned long endMillis;
 unsigned long programStartMillis;
-unsigned long totalMinutes;
+float totalMinutes;
 int16_t programsNumber;
 int16_t program;
+float defaultDelay = 5;
+bool buzz = false;
 
-//Обход всех программ / поиск программы по номеру
-int16_t iterate_all(bool(*Cb)(int16_t, char*)) {
-  File file = SD.open("/raif.cfg", FILE_READ);
-  if (!file) {
-    return -1;
+namespace sd {
+  File file;
+ 
+  void seekPrev() {
+    file.seek(file.position() - 1);
   }
-  bool lineStart = true;
-  bool isDataLine = false;
-  int linePos = 0;
-  char programLine[256];
-  int16_t currentProgram = -1;
-  while(file.position() < file.size()) {
-    char ch = file.read();
-    switch(ch) {
-      case '\r':
-      case '\n':
-        lineStart = true;
-        linePos = 0;
-        if(isDataLine) {
-          if(Cb(currentProgram, programLine)) {
-            return currentProgram;
+
+  char findNextProgram() {
+    bool lineStart = file.position() == 0;
+    while(file.available()) {
+      char ch = file.read();
+      //WRITE(ch);
+      switch(ch) {
+        case '\r':
+        case '\n':
+          lineStart = true;
+          break;
+        default:
+          if(lineStart) {
+            if(isDigit(ch) || ch == ':') {
+              //PRINTLN("findNextProgram returned");
+              return ch;
+            }
           }
-        }
-        isDataLine = false;
+          lineStart = false;
+      }
+    }
+    return '\0';
+  }
+  
+  int16_t getProgramsNumber() {
+    int16_t num = 0;
+    char c;
+    while(c = findNextProgram()) num++;
+    WRITE("Programs number ");
+    PRINT(num, DEC);
+    PRINTLN("");
+    return num;
+  }
+  
+  float readFrequency() {
+    char buff[50];
+    int i=0;
+    while(file.available()) {
+      char ch = file.read();
+      if(isDigit(ch) || ch == '.') {
+        buff[i++]=ch;
+      } else {
+        seekPrev();
         break;
-      default:
-        if(lineStart && isDigit(ch)) {
-           isDataLine = true;
-           currentProgram++;
-        }
-        lineStart = false;
-        if(isDataLine) {
-           programLine[linePos++] = ch;
-           programLine[linePos] = '\0';
-        }
+      }
+    }
+    buff[i]='\0';
+    return atof(buff);
+  }
+  
+  void skipSpaces(){
+    while(file.available()) {
+      char ch = file.read();
+      if(ch != ' ' && ch != '\t') {
+        seekPrev();
+        return;
+      }
     }
   }
-  file.close();
-  return currentProgram;
+  
+  float readDelay() {
+    if(file.available()) {
+      char ch = file.read();
+      if(ch == ' ' || ch == '\t') {
+        skipSpaces();
+        return defaultDelay;
+      } else if (ch == '\r' || ch == '\n') {
+        seekPrev();
+        return defaultDelay;
+      } else if (ch == ':') {
+        char buff[50];
+        int i=0;
+        while(file.available()) {
+          char ch = file.read();
+          if(isDigit(ch) || ch == '.') {
+            buff[i++]=ch;
+          } else {
+            seekPrev();
+            break;
+          }
+        }
+        buff[i]='\0';
+        skipSpaces();
+        return atof(buff);
+      }
+    }
+    return defaultDelay;
+  }
+
+  float readDefaultDelay() {
+    if(file.available() && file.peek() == ':') {
+        char buff[50];
+        int i=0;
+        file.read();
+        while(file.available()) {
+          char ch = file.read();
+          if(isDigit(ch) || ch == '.') {
+            buff[i++]=ch;
+          } else {
+            break;
+          }
+        }
+        buff[i]='\0';
+        skipSpaces();
+        return atof(buff);
+    }
+    return 5;
+  }
+  
+  void seekProgram(int16_t program) {
+    file.seek(0);
+    for(int i=0; i<=program; i++) {
+      findNextProgram();
+    }
+    seekPrev();
+  }
+  
+  void fillProgramInfo(uint16_t& stages, float& minutes) {
+    stages = 0;
+    minutes = 0;
+    defaultDelay = readDefaultDelay();
+    
+    int progStartPos = file.position();
+    do{
+      char ch = file.peek();
+      if(ch == '\r' || ch == '\n') {
+        break;
+      }
+      float f = readFrequency();
+      stages++;
+      float d = readDelay();
+      minutes += d;
+      
+      PRINT(stages, DEC);
+      WRITE(") ");
+      PRINT(f, DEC);
+      WRITE(":");
+      PRINT(d, DEC);
+      PRINTLN();
+    } while(file.available());
+    PRINTLN();
+    file.seek(progStartPos);
+  }
+}  
+
+void setStarted(bool st) {
+  started = st;
+  endMillis = 0;
+#if(!DEBUG)
+  digitalWrite(pinProgStarted, st?HIGH:LOW);
+#endif
 }
 
 //Запись в AD9833
@@ -158,12 +281,12 @@ void paint(bool inputMode = false) {
     lcd.print("Step ");
     lcd.print(programStage + 1, DEC);
     lcd.setCursor(0, 1);
-    lcd.print("F");
-    lcd.print(*pProgramFrequency);
-    lcd.print("Hz");
-    lcd.setCursor(12, 1);
-    lcd.print("T");
-    lcd.print(*pProgramDelay, DEC);
+    //lcd.print("F");
+    lcd.print(programFrequency, 2);
+    lcd.print("Hz ");
+    //lcd.setCursor(12, 1);
+    //lcd.print("T");
+    lcd.print(programDelay, 1);
     lcd.print("m");
   }
 }
@@ -172,18 +295,34 @@ void paintScreen1() {
   resetScreen();
   lcd.print("Step ");
   lcd.print(programStage + 1, DEC);
-  lcd.print(" of ");
+  lcd.print("/");
   lcd.print(programStagesNumber);
   lcd.setCursor(0, 1);
   lcd.print("Time ");
-  lcd.print((millis() - programStartMillis) / 60000, DEC);
-  lcd.print("m of ");
-  lcd.print(totalMinutes);
+  lcd.print(float(millis() - programStartMillis) / 60000, 1);
+  lcd.print("m/");
+  lcd.print(totalMinutes, 1);
   lcd.print("m");
+}
+
+void repaint() {
+  static uint32_t lastRepaintTime = millis();
+  static bool lastScreen = false;
+  if(millis() - lastRepaintTime > 3000) {
+    if(lastScreen) {
+      paint();
+    } else {
+      paintScreen1();
+    }
+    lastScreen = !lastScreen;
+    lastRepaintTime = millis();
+  }
 }
 
 // Установить частоту
 void setFrequency(float val) {
+  programFrequency = val;
+  
   WriteAD9833(bCntrl_reg | bReset | bB28);
   unsigned long FreqData = round(val * 10.73741824/* + 0.5*/);
   WriteAD9833(FreqData & 0x3FFF | bFreq_reg0);
@@ -192,52 +331,35 @@ void setFrequency(float val) {
 }
 
 // Установить длительность
-void setDelay(byte seconds) {
+void setDelay(float seconds) {
+  programDelay = seconds;
   endMillis = millis() + seconds * 1000L * 60;
 }
 
 void startProgram() {
+#if(!DEBUG)
+  pinMode(pinProgStarted, OUTPUT);
+  pinMode(pinBuzz, OUTPUT);
+#endif
   programStagesNumber = 0;
   totalMinutes = 0;
   programStartMillis = millis();
-  iterate_all([](int16_t currentProgram, char* programLine){
-    if(currentProgram == program) {
-      char * pch = strtok(programLine," \t");
-      while (pch != NULL) {
-        programFrequency[programStagesNumber] = atof(pch);
-        char * pch2 = pch;
-        while(*pch2 && *pch2 != ':')pch2++;
-        if(*pch2) {
-          programDelay[programStagesNumber] = atoi(++pch2);
-        } else {
-          programDelay[programStagesNumber] = 5;
-        }
-        totalMinutes += programDelay[programStagesNumber];
-        PRINT(programFrequency[programStagesNumber], DEC);
-        WRITE(" ");
-        PRINTLN(programDelay[programStagesNumber]);
-        pch = strtok(NULL, " \t");
-        programStagesNumber++;
-      }
-      return true;
-    }
-    return false;
-  });
-  
+  sd::seekProgram(program);
+  sd::fillProgramInfo(programStagesNumber, totalMinutes);
+  setFrequency(sd::readFrequency());
+  setDelay(sd::readDelay());
+
   programStage = 0;
-  pProgramFrequency = programFrequency;
-  pProgramDelay = programDelay;
-  setDelay(*pProgramDelay);
-  setFrequency(*pProgramFrequency);
-  paint();
+  stopBuzz();
 }
 
 void stopProgram() {
   endMillis = 0;
   program = -1;
-  started = false;
+  setStarted(false);
   setFrequency(0);
   paint(true);
+  buzz = true;
 }
 
 void nextFrequency() {
@@ -246,44 +368,63 @@ void nextFrequency() {
     endMillis = 0;
     stopProgram();
   } else {
-    pProgramFrequency++;
-    pProgramDelay++;
-    setFrequency(*pProgramFrequency);
-    setDelay(*pProgramDelay);
-    paint();
+    setFrequency(sd::readFrequency());
+    setDelay(sd::readDelay());
   }
 }
 
 void inputProgram() {
-  int16_t num1=0;
+  static int16_t num1=0;
   char button = NO_KEY;
-  while(button != '*' || program < 0) {
-    // Здесь мы читаем клавиатуру и составляем число.
-    // Он выполняется, пока мы не нажмем кнопку '*', и цикл прервется,
-    // или, если будет нажата кнопка '#', всё начнется с начала. 
-        
-    button = keypad.getKey(); // Чтение кнопки
-    switch(button) {
-      case NO_KEY:
-        continue;
-      case '#': // Если пользователь хочет сбросить набор первого числа
-        num1 = 0;
-        break;      
-      case '*': // Если пользователь завершил ввод цифр
-        break;
-      default:
-        num1 = num1*10 + (button -'0'); 
-        break;      
-    }
-    PRINTLN(button);
-    if (num1 > programsNumber)
-    {
+  // Здесь мы читаем клавиатуру и составляем число.
+  // Цикл выполняется, пока мы не нажмем кнопку '*', и цикл прервется,
+  // или, если будет нажата кнопка '#', всё начнется с начала. 
+      
+  button = keypad.getKey(); // Чтение кнопки
+  switch(button) {
+    case NO_KEY:
+      return;
+      //continue;
+    case '#': // Если пользователь хочет сбросить набор первого числа
       num1 = 0;
-    }
-    program = num1 - 1;
-    paint(true);
+      break;      
+    case '*': // Если пользователь завершил ввод цифр
+      break;
+    default:
+      num1 = num1*10 + (button -'0'); 
+      break;      
   }
-  started = true;
+  WRITE("Pressed ");PRINTLN(button);
+  if (num1 > programsNumber)
+  {
+    num1 = 0;
+  }
+  program = num1 - 1;
+  paint(true);
+  stopBuzz();
+  if(button == '*' && program >= 0) {
+    setStarted(true);
+    num1 = 0;
+  }
+}
+
+void updateBuzz() {
+#if !DEBUG
+  if(buzz) {
+    static uint32_t lastUpdateTime = millis();
+    if(millis() - lastUpdateTime > 500) {
+      digitalWrite(pinBuzz, !digitalRead(pinBuzz));
+      lastUpdateTime = millis();
+    }
+  }
+#endif
+}
+
+void stopBuzz() {
+#if !DEBUG
+  buzz = false;
+  digitalWrite(pinBuzz, LOW);
+#endif
 }
 
 bool error = false;
@@ -301,13 +442,14 @@ void setup() {
     error = true;
     return;
   }
-  programsNumber = iterate_all([](int16_t currectProgram, char* programLine){
-    PRINT(currectProgram, DEC);
-    WRITE(": ");
-    PRINTLN(programLine);
-    return false;
-  });
-  if (programsNumber < 0) {
+  sd::file = SD.open("/raif.cfg", FILE_READ);
+  if (!sd::file) {
+    printError("File read failed ");
+    error = true;
+    return;
+  }
+  programsNumber = sd::getProgramsNumber();
+  if (programsNumber == 0) {
     printError("Read config error");
     error = true;
     return;
@@ -322,24 +464,14 @@ void loop() {
       startProgram();
     } else if (millis() >= endMillis) {
       nextFrequency();
-    } else {
-      static uint32_t lastRepaintTime = millis();
-      static bool lastScreen = false;
-      if(millis() - lastRepaintTime > 3000) {
-        if(lastScreen) {
-          paint();
-        } else {
-          paintScreen1();
-        }
-        lastScreen = !lastScreen;
-        lastRepaintTime = millis();
-      }
     }
+    repaint();
     if(keypad.getKey() == '#') {
       stopProgram();
+      stopBuzz();
     }
   } else {
+    updateBuzz();
     inputProgram();
-    endMillis = 0;
   }
 }
