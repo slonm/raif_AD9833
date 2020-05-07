@@ -11,8 +11,8 @@ const char keys[ROWS][COLS] = {
   {'7','8','9'},
   {'*','0','#'}
 };
-const byte rowPins[ROWS] = {14, 15, 16, 17}; 
-const byte colPins[COLS] = {18, 19, 8}; 
+byte rowPins[ROWS] = {14, 15, 16, 17}; 
+byte colPins[COLS] = {18, 19, 8}; 
 //SPI SD card
 const byte sdChipSelect = 9;
 //SPI AD9833
@@ -34,13 +34,11 @@ const byte pinBuzz = 0;
 #if DEBUG
   #define SERIAL_BEGIN(a) Serial.begin(a);  while (!Serial);
   #define WRITE(a) Serial.write(a)
-  #define PRINTLN() Serial.println()
   #define PRINTLN(a) Serial.println(a)
   #define PRINT(a, b) Serial.print(a,b)
 #else
   #define SERIAL_BEGIN(a)
   #define WRITE(a)
-  #define PRINTLN()
   #define PRINTLN(a)
   #define PRINT(a, b)
 #endif
