@@ -80,8 +80,15 @@ bool buzz = false;
 namespace sd {
   File file;
  
+  void seek(uint32_t newPos) {
+    if(!file.seek(newPos)) {
+      file.seek(0);
+      file.seek(newPos);
+    }
+  }
+  
   void seekPrev() {
-    file.seek(file.position() - 1);
+    seek(file.position() - 1);
   }
 
   char findNextProgram() {
@@ -193,7 +200,7 @@ namespace sd {
   }
   
   void seekProgram(int16_t program) {
-    file.seek(0);
+    seek(0);
     for(int i=0; i<=program; i++) {
       findNextProgram();
     }
@@ -205,7 +212,7 @@ namespace sd {
     minutes = 0;
     defaultDelay = readDefaultDelay();
     
-    int progStartPos = file.position();
+    uint32_t progStartPos = file.position();
     do{
       char ch = file.peek();
       if(ch == '\r' || ch == '\n') {
@@ -224,7 +231,7 @@ namespace sd {
       PRINTLN();
     } while(file.available());
     PRINTLN();
-    file.seek(progStartPos);
+    seek(progStartPos);
   }
 }  
 
@@ -319,13 +326,18 @@ void repaint() {
 
 // Установить частоту
 void setFrequency(float val) {
+  WRITE("Set frequency: ");
+  PRINT(val, DEC);
+  PRINTLN();
   programFrequency = val;
   
   WriteAD9833(bCntrl_reg | bReset | bB28);
-  unsigned long FreqData = round(val * 10.73741824/* + 0.5*/);
-  WriteAD9833(FreqData & 0x3FFF | bFreq_reg0);
-  WriteAD9833((FreqData >> 14) | bFreq_reg0);
-  WriteAD9833(bCntrl_reg | bB28); // Снимаем Reset
+  if(val > 0) {
+    unsigned long FreqData = round(val * 10.73741824/* + 0.5*/);
+    WriteAD9833(FreqData & 0x3FFF | bFreq_reg0);
+    WriteAD9833((FreqData >> 14) | bFreq_reg0);
+    WriteAD9833(bCntrl_reg | bB28); // Снимаем Reset
+  }
 }
 
 // Установить длительность
@@ -440,7 +452,7 @@ void setup() {
     error = true;
     return;
   }
-  sd::file = SD.open("/raif.cfg", FILE_READ);
+  sd::file = SD.open("/raif.cfg", FILE_READ );
   if (!sd::file) {
     printError("File read failed ");
     error = true;
