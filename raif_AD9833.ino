@@ -74,7 +74,8 @@ unsigned long programStartMillis;
 float totalMinutes;
 int16_t programsNumber;
 int16_t program;
-float defaultDelay = 5;
+float globalDefaultDelay = 3;
+float programDefaultDelay = globalDefaultDelay;
 bool buzz = false;
 
 namespace sd {
@@ -155,10 +156,10 @@ namespace sd {
       char ch = file.read();
       if(ch == ' ' || ch == '\t') {
         skipSpaces();
-        return defaultDelay;
+        return programDefaultDelay;
       } else if (ch == '\r' || ch == '\n') {
         seekPrev();
-        return defaultDelay;
+        return programDefaultDelay;
       } else if (ch == ':') {
         char buff[50];
         int i=0;
@@ -176,7 +177,7 @@ namespace sd {
         return atof(buff);
       }
     }
-    return defaultDelay;
+    return programDefaultDelay;
   }
 
   float readDefaultDelay() {
@@ -196,7 +197,7 @@ namespace sd {
         skipSpaces();
         return atof(buff);
     }
-    return 5;
+    return globalDefaultDelay;
   }
   
   void seekProgram(int16_t program) {
@@ -210,7 +211,7 @@ namespace sd {
   void fillProgramInfo(uint16_t& stages, float& minutes) {
     stages = 0;
     minutes = 0;
-    defaultDelay = readDefaultDelay();
+    programDefaultDelay = readDefaultDelay();
     
     uint32_t progStartPos = file.position();
     do{
